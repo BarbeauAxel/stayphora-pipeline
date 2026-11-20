@@ -29,6 +29,12 @@ Rien de tout cela n'est fait.
   - le sha256 du dossier `pipeline/` dans l'image correspond au commit.
 - Publier sur ghcr.io : l'utilisateur fait lui-même `docker login`.
 
+## Option : retirer la « coque » hors de la pièce (désactivée par défaut)
+
+- **Constat sur playroom (job 8) :** environ 4 300 gaussiennes (0,8 %) se trouvent derrière les murs, entre 2 et 5 m du centre. Elles sont grosses (22 cm en médiane, jusqu'à 70 cm) et assez opaques (0,37). Vues de l'extérieur, elles donnent des taches floues orangées, comme la vue par défaut de SuperSplat. Vue de l'intérieur, la scène est nette.
+- **Option prévue :** `export.crop_shell` (désactivée par défaut). Elle retirerait les gaussiennes hors de la boîte englobant les caméras et les points COLMAP, élargie d'environ 0,5 m, ou seulement celles qui sont grandes.
+- **Risque :** trouer ce qu'on voit par les ouvertures (porte, cage d'escalier). À valider par rendu avant et après.
+
 ## Cache de l'image sur un volume réseau RunPod
 
 - **Problème :** le téléchargement de l'image prend 4 à 9 min par pod. C'était environ un quart de la durée facturée du job 8.
