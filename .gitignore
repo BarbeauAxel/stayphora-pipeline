@@ -1,0 +1,28 @@
+# Secrets : uniquement en variables d'environnement
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.claude/settings.local.json
+
+# Python / outils
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+
+# Données et résultats (lourds, jamais versionnés)
+work/
+*.spz
+*.ply
+*.mp4
+*.mov
+tests/data/*
+!tests/data/train_divergence.log
+
+# Artefacts Windows (redirection vers NUL depuis Git Bash)
+NUL

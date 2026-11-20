@@ -1,0 +1,8 @@
+{
+  "name": "stayphora-pipeline-tools",
+  "private": true,
+  "description": "Outils Node du pipeline (splat-transform), version figée — identique au Dockerfile.",
+  "devDependencies": {
+    "@playcanvas/splat-transform": "3.12.0"
+  }
+}
