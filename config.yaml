@@ -58,7 +58,7 @@ train:                       # étape 4 — gsplat (examples/simple_trainer.py, 
     scene_scale_range: [0.5, 10.0]  # échelle de scène gsplat (contrôlée dès le démarrage)
   max_steps: 30000
   data_factor: 1
-  test_every: 1000           # 1 image sur N mise de côté pour mesurer le PSNR
+  test_every: 8              # 1 image sur 8 mise de côté (non entraînée) pour PSNR/SSIM/LPIPS
   extra_args: []             # options supplémentaires passées telles quelles au trainer
 
 export:                      # étape 5 — splat-transform
@@ -76,6 +76,15 @@ export:                      # étape 5 — splat-transform
       max_splats: 500000
       max_mb: 8
       sh_bands: 0
+
+quality:                     # contrôle visuel automatique (pipeline/quality.py, rendu gsplat)
+  enabled: true
+  train_views: 3             # vues d'entraînement rendues en PNG (photo | rendu), étapes 4 et 5
+  max_psnr_drop_db:          # arrêt si le PSNR de test du .spz relu baisse de plus que ça
+    normal: 1.5              # par rapport au .ply entraîné (valeurs provisoires, à calibrer)
+    mobile: 4.0
+  sheet_size: 640x480        # planche 4 vues depuis le point de départ (jointe à l'e-mail)
+  sheet_fov_deg: 70
 
 publish:                     # étape 6 — Cloudflare R2
   bucket: stayphora-assets

@@ -129,6 +129,51 @@ d'échec est aussi envoyé.
   .ply serait exporté dans un repère normalisé inconnu. Avant de lancer l'entraînement,
   le pipeline vérifie que toutes les options figurent dans le `--help` du trainer.
 
+## Contrôle visuel automatique
+
+Activé par `quality.enabled` (`pipeline/quality.py`, `pipeline/render_check.py`). Le rendu
+passe par `gsplat.rasterization`, comme à l'entraînement, et se fait sur le pod.
+
+- **Vues de test** : `train.test_every: 8` met de côté 1 image sur 8, qui ne sert pas à
+  l'entraînement (c'est la convention de gsplat et de 3DGS). Le trainer mesure PSNR, SSIM et
+  LPIPS sur ces vues. Avant, `test_every: 1000` ne gardait qu'une seule vue de test, d'où le
+  PSNR de 23 peu représentatif du job 8. Contrepartie : 12,5 % d'images en moins pour
+  l'entraînement.
+- **Fin de l'étape 4** : le `.ply` entraîné est rendu depuis toutes les vues de test et
+  depuis 3 caméras d'entraînement réparties sur la trajectoire. Résultats dans
+  `4_train/check/` :
+  - `train.json` : métriques moyennes et par vue ;
+  - `train_<image>.png` : photo et rendu côte à côte ;
+  - `renders/train/` : rendus bruts, qui servent de référence et ne sont pas rapatriés.
+
+  Un écart de plus de 0,5 dB avec le PSNR du trainer est signalé : lecture du `.ply` ou
+  caméras à vérifier.
+- **Fin de l'étape 5** : chaque `.spz` est relu (splat-transform `.spz` → `.ply`), puis
+  ramené dans le repère d'entraînement (positions × k, log-échelles + ln k). Il est rendu
+  depuis les mêmes caméras.
+  - Le **PSNR de test** est comparé à celui du `.ply` entraîné. Si la baisse dépasse
+    `quality.max_psnr_drop_db` (normal 1,5 dB, mobile 4 dB, valeurs **provisoires** à
+    calibrer), l'étape échoue et rien n'est publié.
+  - Le PSNR du rendu `.spz` contre le rendu entraîné (`psnr_vs_ref`) est aussi noté.
+- **Planche 4 vues** : `5_export/check/normal_planche.png` montre 4 vues depuis le point de
+  départ de la visite (même calcul que `tour-entry.ts`). Elle est rapatriée et jointe à
+  l'e-mail.
+- **Si l'outil de contrôle lui-même plante** (CUDA, lecture), l'erreur est notée dans les
+  métriques et dans l'e-mail, mais n'arrête pas le job : on ne perd pas un entraînement
+  payé. Seul le dépassement de seuil arrête le job.
+- **Rapatriement** : les JSON et PNG des deux dossiers `check/` sont copiés dans
+  `C:\stayphora-work\<slug>\remote\check\`.
+
+**Diagnostic sans GPU** : `python scripts/inspect_splats.py fichier.ply fichier.spz --out diag`
+donne, pour chaque fichier :
+- les statistiques : tailles exp(log_scale), opacités, couleurs DC, gaussiennes hors de la pièce ;
+- une planche de 4 vues, rendue sur processeur (`pipeline/splat_render.py`, couleur de base
+  seulement, environ 10 s par vue).
+
+Une scène d'intérieur vue **de l'extérieur** (vue par défaut de SuperSplat) montre une coque
+de grosses gaussiennes floues derrière les murs. Ce n'est pas un défaut d'export : il faut
+regarder depuis l'intérieur.
+
 ## Installation locale (Windows, pour développer)
 
 ```powershell
@@ -405,6 +450,10 @@ L'entraînement se teste sur le pod avec `--test-dataset` : « playroom » de De
 intérieur, 225 photos, étapes 3 à 7, sans R2.
 
 ## Points à valider au premier job GPU
+
+- Le contrôle visuel sur GPU : `render_check` a été testé dans l'image avec un rendu CPU à la
+  place de gsplat, mais pas encore avec gsplat. Il faut aussi calibrer
+  `quality.max_psnr_drop_db` sur les baisses réellement mesurées.
 
 - Les options COLMAP 4.2.1 (`FeatureExtraction.use_gpu`…) viennent du code source au tag
   4.2.1, mais elles n'ont pas encore été exécutées.

@@ -19,6 +19,7 @@ import shutil
 from pathlib import Path
 
 from ..context import Context, StepError
+from .. import quality
 from ..train_guard import TrainGuard
 from ..plyutil import read_header
 from . import s3_colmap
@@ -33,6 +34,15 @@ def train_dir(ctx: Context) -> Path:
 
 def splats_path(ctx: Context) -> Path:
     return train_dir(ctx) / "splats.ply"
+
+
+def check_dir(ctx: Context) -> Path:
+    return train_dir(ctx) / "check"
+
+
+def check_renders(ctx: Context) -> Path:
+    """Rendus bruts du .ply entraîné : référence du contrôle après export (étape 5)."""
+    return check_dir(ctx) / "renders" / quality.TRAIN_TAG
 
 
 def outputs(ctx: Context) -> list[Path]:
@@ -110,6 +120,9 @@ def run(ctx: Context) -> dict:
             (train_dir(ctx) / "guard.json").write_text(json.dumps(guard.report, indent=2), encoding="utf-8")
             log.info("Garde-fou : %s", guard.report)
     if ctx.dry_run:
+        if quality.enabled(ctx):
+            quality.run_check(ctx, quality.command(ctx, splats_path(ctx), quality.TRAIN_TAG, check_dir(ctx),
+                                                   data_dir), check_dir(ctx), quality.TRAIN_TAG)
         return {}
 
     plys = sorted((result_dir / "ply").glob("point_cloud_*.ply"),
@@ -129,9 +142,25 @@ def run(ctx: Context) -> dict:
     if stats:
         try:
             val = json.loads(stats[-1].read_text())
-            metrics["psnr"] = round(float(val["psnr"]), 2)
+            for k in ("psnr", "ssim", "lpips"):
+                if k in val:
+                    metrics[k] = round(float(val[k]), 4 if k != "psnr" else 2)
         except (KeyError, ValueError):
             pass
+    if quality.enabled(ctx):
+        cd = check_dir(ctx)
+        if cd.exists():
+            shutil.rmtree(cd)
+        res = quality.run_check(ctx, quality.command(ctx, splats_path(ctx), quality.TRAIN_TAG, cd, data_dir),
+                                cd, quality.TRAIN_TAG)
+        metrics["quality_train"] = quality.summary(res)
+        if "error" in res:
+            return metrics
+        mine = (res.get("test") or {}).get("psnr")
+        log.info("Contrôle visuel : test %s ; vues d'entraînement %s", res.get("test"), res.get("train_views"))
+        if mine is not None and "psnr" in metrics and abs(mine - metrics["psnr"]) > 0.5:
+            log.warning("PSNR de test du contrôle (%.2f dB) différent de celui du trainer (%.2f dB) : "
+                        "lecture du .ply ou caméras à vérifier", mine, metrics["psnr"])
     return metrics
 
 

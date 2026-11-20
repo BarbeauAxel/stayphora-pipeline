@@ -56,7 +56,7 @@ DEFAULTS: dict[str, Any] = {
         },
         "max_steps": 30_000,
         "data_factor": 1,
-        "test_every": 1000,
+        "test_every": 8,
         "extra_args": [],
     },
     "export": {
@@ -74,6 +74,13 @@ DEFAULTS: dict[str, Any] = {
         "assets_url": "https://assets.stayphora.fr",
         "tours_url": "https://visite.stayphora.fr",
         "cache_control": "public, max-age=3600",
+    },
+    "quality": {
+        "enabled": True,
+        "train_views": 3,
+        "max_psnr_drop_db": {"normal": 1.5, "mobile": 4.0},
+        "sheet_size": "640x480",
+        "sheet_fov_deg": 70,
     },
     "tour_entry": {
         "bounds_percentile": 2.0,
@@ -131,7 +138,7 @@ def _merge(base: dict, override: dict, path: str = "") -> dict:
     for key, value in (override or {}).items():
         if key not in base:
             raise ConfigError(f"clé de configuration inconnue : {path}{key}")
-        if isinstance(base[key], dict) and key not in ("variants",):
+        if isinstance(base[key], dict) and key not in ("variants", "max_psnr_drop_db"):
             if not isinstance(value, dict):
                 raise ConfigError(f"{path}{key} doit être une section")
             out[key] = _merge(base[key], value, f"{path}{key}.")
@@ -179,6 +186,11 @@ def _validate(cfg: dict) -> None:
                 raise ConfigError(f"export.variants.{name}.{k} manquant")
         if v["sh_bands"] not in (0, 1, 2, 3):
             raise ConfigError(f"export.variants.{name}.sh_bands doit valoir 0..3")
+    q = cfg["quality"]
+    if q["enabled"]:
+        for name in e["variants"]:
+            if name not in q["max_psnr_drop_db"]:
+                raise ConfigError(f"quality.max_psnr_drop_db.{name} manquant (une valeur par variante d'export)")
     r = cfg["runpod"]
     if not r["gpus"]:
         raise ConfigError("runpod.gpus : au moins un GPU")

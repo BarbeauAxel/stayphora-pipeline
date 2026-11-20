@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 from pathlib import Path
 
+from .. import quality
 from ..alignment import Alignment, apply_overrides, splat_transform_args
 from ..context import Context, StepError
-from ..plyutil import read_header
+from ..plyutil import read_header, read_vertex_columns
 from . import s3_colmap, s4_train
 
 NAME = "export"
@@ -55,6 +57,76 @@ def _with_overrides(ctx: Context, al: Alignment) -> Alignment:
         al = apply_overrides(al, o["scale_factor"], o["yaw_deg"], o["floor_offset_m"])
         log.info("Corrections manuelles appliquées : %s", al.overrides)
     return al
+
+
+def check_dir(ctx: Context) -> Path:
+    return export_dir(ctx) / "check"
+
+
+def train_scale(ctx: Context) -> float:
+    return float(json.loads(s3_colmap.train_transform_path(ctx).read_text(encoding="utf-8"))["train_scale"])
+
+
+def sheet_eye(ctx: Context) -> list[float]:
+    """Point de départ de la visite (même calcul que tour-entry.ts), en mètres."""
+    import numpy as np
+    from .s7_tour_entry import compute_layout
+    d = read_vertex_columns(cleaned_path(ctx), ["x", "y", "z"])
+    return compute_layout(np.stack([d["x"], d["y"], d["z"]], 1), ctx.cfg)["rooms"][0]["position"]
+
+
+def quality_check(ctx: Context, metrics: dict) -> None:
+    """Rend chaque .spz relu avec les caméras de l'entraînement ; arrêt si le rendu se dégrade."""
+    st = ctx.cfg["export"]["splat_transform"]
+    cd = check_dir(ctx)
+    if not ctx.dry_run:
+        if cd.exists():
+            shutil.rmtree(cd)
+        cd.mkdir(parents=True)
+    train_json = s4_train.check_dir(ctx) / f"{quality.TRAIN_TAG}.json"
+    train_res = None
+    if not ctx.dry_run:
+        if not train_json.is_file():
+            log.warning("Contrôle visuel de l'étape 4 absent (%s) : pas de comparaison avant/après export", train_json)
+        else:
+            train_res = json.loads(train_json.read_text(encoding="utf-8"))
+            if "error" in train_res:
+                train_res = None
+    k = 1.0 if ctx.dry_run else train_scale(ctx)
+    eye = [0.0, 1.5, 0.0] if ctx.dry_run else sheet_eye(ctx)
+    reasons = []
+    for i, name in enumerate(ctx.cfg["export"]["variants"]):
+        decoded = cd / f"{name}_decoded.ply"
+        try:
+            ctx.run([st, "-q", "-w", spz_path(ctx, name), decoded])
+        except StepError as exc:
+            log.error("Contrôle visuel %s : relecture du .spz impossible (%s)", name, exc)
+            metrics[f"quality_{name}"] = {"error": str(exc)[:500]}
+            continue
+        ref = s4_train.check_renders(ctx)
+        cmd = quality.command(ctx, decoded, name, cd, s3_colmap.train_data_dir(ctx), scale=k,
+                              reference=ref if train_res else None,
+                              sheet_eye=eye if i == 0 else None, sheet_scale=k)
+        res = quality.run_check(ctx, cmd, cd, name)
+        if not ctx.dry_run:
+            decoded.unlink(missing_ok=True)
+        if res is None:
+            continue
+        q = quality.summary(res)
+        if train_res and "error" not in res:
+            drop, reason = quality.export_drop_reason(train_res, res, name,
+                                                      ctx.cfg["quality"]["max_psnr_drop_db"][name])
+            q["psnr_drop_db"] = drop
+            q["psnr_vs_train_render"] = (res.get("test") or {}).get("psnr_vs_ref")
+            log.info("  contrôle %s : test %s ; baisse de PSNR %s dB ; PSNR / rendu entraîné %s dB",
+                     name, res.get("test"), drop, q["psnr_vs_train_render"])
+            if reason:
+                reasons.append(reason)
+        metrics[f"quality_{name}"] = q
+        if res.get("sheet"):
+            metrics["quality_sheet"] = str(cd / res["sheet"])
+    if reasons:
+        raise StepError(" ; ".join(reasons))
 
 
 def export_transform(ctx: Context) -> Alignment:
@@ -152,6 +224,8 @@ def run(ctx: Context) -> dict:
     if not ctx.dry_run:
         for p in export_dir(ctx).glob("_decimated_*.ply"):
             p.unlink()
+    if quality.enabled(ctx):
+        quality_check(ctx, metrics)
     return metrics
 
 

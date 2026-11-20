@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import logging
 from pathlib import Path
@@ -28,6 +29,46 @@ def _fmt_s(sec: float | None) -> str:
     m, s = divmod(int(sec), 60)
     h, m = divmod(m, 60)
     return f"{h} h {m:02d} min" if h else f"{m} min {s:02d} s"
+
+
+def _q(t: dict | None) -> str:
+    if not t:
+        return "—"
+    parts = [f"PSNR {t['psnr']:.2f} dB" if t.get("psnr") is not None else None,
+             f"SSIM {t['ssim']:.3f}" if t.get("ssim") is not None else None,
+             f"LPIPS {t['lpips']:.3f}" if t.get("lpips") is not None else None]
+    return ", ".join(p for p in parts if p) + (f" ({t['n']} vues)" if t.get("n") else "")
+
+
+def quality_lines(ctx: Context, m: dict) -> list[str]:
+    lines = []
+    if "psnr" in m:
+        lines.append("Qualité (vues de test, trainer) : " + _q({k: m.get(k) for k in ("psnr", "ssim", "lpips")}))
+    qt = m.get("quality_train")
+    if qt:
+        lines.append("Contrôle visuel entraînement : " + (f"impossible ({qt['error']})" if "error" in qt else
+                     f"test {_q(qt.get('test'))} ; vues d'entraînement {_q(qt.get('train_views'))}"))
+    for v in ctx.cfg["export"]["variants"]:
+        q = m.get(f"quality_{v}")
+        if not q:
+            continue
+        if "error" in q:
+            lines.append(f"Contrôle visuel {v} : impossible ({q['error']})")
+            continue
+        drop = q.get("psnr_drop_db")
+        lines.append(f"Contrôle visuel {v} (.spz relu) : test {_q(q.get('test'))}"
+                     + (f" ; baisse {drop:+.2f} dB (max {ctx.cfg['quality']['max_psnr_drop_db'].get(v)})"
+                        if drop is not None else ""))
+    if m.get("quality_sheet"):
+        lines.append(f"Planche 4 vues : pièce jointe {Path(m['quality_sheet']).name}")
+    return lines
+
+
+def attachments(m: dict) -> list[dict]:
+    p = Path(m["quality_sheet"]) if m.get("quality_sheet") else None
+    if not p or not p.is_file() or p.stat().st_size > 10_000_000:
+        return []
+    return [{"filename": p.name, "content": base64.b64encode(p.read_bytes()).decode("ascii")}]
 
 
 def build_report(ctx: Context, state: State, error: str | None = None) -> tuple[str, str]:
@@ -67,8 +108,7 @@ def build_report(ctx: Context, state: State, error: str | None = None) -> tuple[
         lines.append(f"Corrections manuelles : {aa['overrides']}")
     if "gaussians_trained" in m:
         lines.append(f"Gaussiennes : {m['gaussians_trained']} entraînées, {m.get('gaussians_cleaned', '?')} après nettoyage")
-    if "psnr" in m:
-        lines.append(f"PSNR : {m['psnr']} dB")
+    lines += quality_lines(ctx, m)
     for v in ctx.cfg["export"]["variants"]:
         if f"{v}_size_mb" in m:
             lines.append(f"{v} : {m.get(f'{v}_splats')} splats, SH {m.get(f'{v}_sh_bands')}, {m[f'{v}_size_mb']} Mo")
@@ -84,7 +124,7 @@ def build_report(ctx: Context, state: State, error: str | None = None) -> tuple[
     return subject, text
 
 
-def send(ctx: Context, subject: str, text: str) -> str:
+def send(ctx: Context, subject: str, text: str, files: list[dict] | None = None) -> str:
     n = ctx.cfg["notify"]
     body = {
         "from": n["from"],
@@ -93,6 +133,8 @@ def send(ctx: Context, subject: str, text: str) -> str:
         "text": text,
         "html": f"<pre style=\"font-family:ui-monospace,monospace;font-size:13px\">{html.escape(text)}</pre>",
     }
+    if files:
+        body["attachments"] = files
     r = requests.post(RESEND_URL, json=body, timeout=30,
                       headers={"Authorization": f"Bearer {get_secret('RESEND_API_KEY')}"})
     if r.status_code >= 300:
@@ -112,7 +154,7 @@ def run(ctx: Context) -> dict:
         return {}
     if missing(("RESEND_API_KEY",)):
         raise StepError("variable d'environnement RESEND_API_KEY manquante")
-    email_id = send(ctx, subject, text)
+    email_id = send(ctx, subject, text, attachments(state.all_metrics()))
     log.info("E-mail envoyé à %s (id %s)", n["to"], email_id)
     return {"email_sent": True, "email_id": email_id}
 

@@ -425,6 +425,10 @@ def remote_session(endpoint: tuple[str, int], key: Path, a: argparse.Namespace, 
     milestone("rapatriement")
     fetch_logs()
     ssh.get(f"{remote_root}/4_train/guard.json", local)
+    # Contrôle visuel : JSON + PNG (photo | rendu, planche 4 vues) ; pas les rendus bruts (renders/).
+    for d in ("4_train/check", "5_export/check"):
+        ssh.get(f"{remote_root}/{d}/*.json", local / "check")
+        ssh.get(f"{remote_root}/{d}/*.png", local / "check")
     if code != 0:
         # Arrêt (garde-fou ou erreur) : .ply partiels des points de contrôle, pour analyse.
         say("rapatriement des .ply partiels de l'entraînement (s'il y en a)")
